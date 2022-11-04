@@ -260,6 +260,14 @@ class ResultadoEleicoesCrawler:
                 yield Urna(self.id_pleito, *sessao)
 
     @staticmethod
+    async def get_bu_file(url):
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url) as request:
+                data = await request.content.read()
+                return data
+
+
+    @staticmethod
     async def download(url, save_path):
         async with aiohttp.ClientSession() as session:
             async with session.get(url) as request:
@@ -270,6 +278,15 @@ class ResultadoEleicoesCrawler:
                 file = await aiofiles.open(save_path, 'wb')
                 await file.write(await request.content.read())
                 # print("save_path", save_path)
+
+    async def get_bu_data_hook_async(self, response):
+        jsn = await AioHttpRequest.response_hook_json(response)
+        urna = Urna(self.id_pleito, *response.url.path.split('/')[6:10])
+        url_bu = urna.url_bu_from_json(jsn)
+
+        data_bu = await self.get_bu_file(url_bu)
+
+        return data_bu
 
     async def salva_bu_hook_async(self, response):
         jsn = await AioHttpRequest.response_hook_json(response)
@@ -284,8 +301,46 @@ class ResultadoEleicoesCrawler:
 
         # BuFile(urna, path_raiz="C:/bu/").grava_arquivo(data_bu)
 
-    def load_and_save_BUs(self, list_uf_list_sessao):
+    def send(self, result):
+        print("Pegou BU")
+        pass
 
+    def load_and_send(self, list_uf_list_sessao):
+
+        urnas_requests = [
+                             AioHttpRequest(urna.url_json_dados_urna,
+                                            response_hook=self.get_bu_data_hook_async
+                                            ) for urna in self.generator_urna(list_uf_list_sessao) if
+                             not BuFile(urna, path_raiz="C:/bu/").pre_exist()][:]
+
+        print("Qtd de urnas faltantes", len(urnas_requests))
+        pprint(urnas_requests[:])
+        urnas_retry = urnas_requests
+        while urnas_retry:
+            LOG.debug(f"Pegando dados de {len(urnas_retry)}")
+            self.aiohttp.work(urnas_requests,
+                              max_works=self.workers
+                              )
+
+            retry = []
+            for aioreq in urnas_retry:
+                if aioreq.exception:
+                    print("FAIL: ", aioreq.url)
+                    pprint(aioreq.tracebak)
+                    aioreq.reset()
+                    retry.append(aioreq)
+
+                send_bu(aioreq.result)
+
+            urnas_retry = retry
+            pprint("##########  FAILS ##############")
+            pprint(len(urnas_retry))
+            if len(urnas_retry):
+                LOG.debug("Aguardando 600s para reiniciar o processo")
+                sleep(600)
+                LOG.debug("reiniciando")
+
+    def load_and_save_BUs(self, list_uf_list_sessao):
 
         urnas_requests = [
             AioHttpRequest(urna.url_json_dados_urna,
@@ -309,6 +364,7 @@ class ResultadoEleicoesCrawler:
                     pprint(aioreq.tracebak)
                     aioreq.reset()
                     retry.append(aioreq)
+
             urnas_retry = retry
             pprint("##########  FAILS ##############")
             pprint(len(urnas_retry))
@@ -316,7 +372,6 @@ class ResultadoEleicoesCrawler:
                 LOG.debug("Aguardando 600s para reiniciar o processo")
                 sleep(600)
                 LOG.debug("reiniciando")
-
 
     @log_in_out
     def work(self, list_estados_uf=None):
@@ -333,7 +388,7 @@ class ResultadoEleicoesCrawler:
 
 
 def test_bu_file_exist():
-    urna = Urna('ba',30694,28, 406)
+    urna = Urna('ba', 30694, 28, 406)
     print(urna)
     print(BuFile(urna, path_raiz="C:/bu/").pre_exist())
 
